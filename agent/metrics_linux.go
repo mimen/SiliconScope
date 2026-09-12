@@ -129,7 +129,14 @@ func readDisks() []Disk {
 			continue
 		}
 		device, mount, fsType := fields[0], unescapeMount(fields[1]), fields[2]
-		if !localFSTypes[fsType] {
+		// A container's root is an overlay, and it is that machine's real disk from the inside, so
+		// accept overlay at "/" even though it is otherwise a stacking filesystem worth skipping.
+		if !localFSTypes[fsType] && !(fsType == "overlay" && mount == "/") {
+			continue
+		}
+		// Bind mounts of a single file (a container's /etc/hosts, /etc/resolv.conf) carry the whole
+		// backing device's statfs numbers while naming a file. Only a directory is a filesystem.
+		if fi, err := os.Stat(mount); err != nil || !fi.IsDir() {
 			continue
 		}
 		var st syscall.Statfs_t
