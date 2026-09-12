@@ -94,9 +94,14 @@ struct DashboardState {
     /// A remote runtime's measured decode rate, when the agent reports one. Local mode has its own
     /// live path (RuntimeAPISample / the benchmark button), so this is the remote-only carrier.
     private(set) var remoteTokenRate: FleetTokenRate?
+    /// Remote local-volume capacity, when the agent reports it. The reverse snapshot mapping leaves
+    /// disk zeroed (the local disk card is single-volume with live I/O the wire lacks), so the
+    /// multi-volume capacity list rides alongside the snapshot instead of through it. nil pre-disks.
+    private(set) var remoteDisks: [FleetDisk]?
 
     init(remote m: MachineMetrics) {
         remoteTokenRate = m.llm?.rate
+        remoteDisks = m.disks
         let (s, topo) = m.toDashboardSnapshot()
         snapshot = s
         topology = topo

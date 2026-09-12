@@ -204,6 +204,9 @@ struct DashboardView: View {
                     SensorsCard(temperature: snapshot.temperature, thermal: snapshot.thermal,
                                 groupHistory: s.history.sensorGroups)
                         .frame(minHeight: Layout.Row.sensorsNarrow)
+                    // Capacity crosses the wire even though live disk I/O doesn't. nil disks = an
+                    // agent too old to report them → no card, not an empty one.
+                    if let disks = s.remoteDisks, !disks.isEmpty { RemoteStorageCard(disks: disks) }
                 } else {
 
                 // AI cockpit pair, side by side (matches the rest of the 2-column grid and
@@ -1037,6 +1040,25 @@ private struct LabeledSparkline: View {
                 .tracking(0.5)
                 .foregroundStyle(color.opacity(0.9))
             Sparkline(values, color: color, role: .inline(height: height, axis: axis))
+        }
+    }
+}
+
+// MARK: - Storage (remote)
+
+/// Per-volume capacity for a remote machine. The local `NetworkDiskCard` is single-volume with live
+/// read/write rates the wire doesn't carry; the fleet schema sends a multi-volume capacity list, so
+/// it gets its own card. Used is derived (total − free); a disk has no identity colour, so the fill
+/// uses the state ramp (the one bar §5.4 sanctions for `.state`).
+private struct RemoteStorageCard: View {
+    let disks: [FleetDisk]
+    var body: some View {
+        Card(title: "Storage") {
+            ForEach(disks, id: \.mount) { d in
+                Bar(label: d.mount, value: d.usedFraction,
+                    detail: formatBytesOfTotal(UInt64(d.usedBytes), UInt64(max(0, d.totalBytes))),
+                    encoding: .state)
+            }
         }
     }
 }

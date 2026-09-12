@@ -26,10 +26,15 @@ import (
 const machineKind = "windows"
 
 var (
-	kernel32                 = windows.NewLazySystemDLL("kernel32.dll")
-	procGetSystemTimes       = kernel32.NewProc("GetSystemTimes")
-	procGlobalMemoryStatusEx = kernel32.NewProc("GlobalMemoryStatusEx")
+	kernel32                    = windows.NewLazySystemDLL("kernel32.dll")
+	procGetSystemTimes          = kernel32.NewProc("GetSystemTimes")
+	procGlobalMemoryStatusEx    = kernel32.NewProc("GlobalMemoryStatusEx")
+	procGetLogicalDriveStringsW = kernel32.NewProc("GetLogicalDriveStringsW")
+	procGetDriveTypeW           = kernel32.NewProc("GetDriveTypeW")
+	procGetDiskFreeSpaceExW     = kernel32.NewProc("GetDiskFreeSpaceExW")
 )
+
+const driveFixed = 3 // DRIVE_FIXED — a non-removable local disk (excludes removable/network/CD-ROM)
 
 func hostname() string {
 	h, _ := os.Hostname()
@@ -96,6 +101,62 @@ func readMemory() Memory {
 	m := Memory{TotalBytes: int64(s.TotalPhys), AvailableBytes: int64(s.AvailPhys)}
 	m.UsedBytes = m.TotalBytes - m.AvailableBytes
 	return m
+}
+
+// MARK: - Disks
+
+// readDisks enumerates logical drives, keeps only fixed disks (GetDriveTypeW == DRIVE_FIXED), and
+// reads each one's capacity. Free uses the caller-available bytes (GetDiskFreeSpaceExW's
+// lpFreeBytesAvailableToCaller), the Windows analogue of statfs Bavail, so quota-restricted space
+// isn't counted as free. FSType is left unset (no cheap CGO-free call); it's omitempty on the wire.
+func readDisks() []Disk {
+	buf := make([]uint16, 256)
+	n, _, _ := procGetLogicalDriveStringsW.Call(uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
+	if n == 0 {
+		return []Disk{} // never nil — a nil slice marshals to `null` and breaks the viewer (#33)
+	}
+	disks := []Disk{}
+	for _, root := range splitDriveStrings(buf[:n]) {
+		rootPtr, err := windows.UTF16PtrFromString(root)
+		if err != nil {
+			continue
+		}
+		if t, _, _ := procGetDriveTypeW.Call(uintptr(unsafe.Pointer(rootPtr))); t != driveFixed {
+			continue
+		}
+		var freeToCaller, total, totalFree uint64
+		r, _, _ := procGetDiskFreeSpaceExW.Call(
+			uintptr(unsafe.Pointer(rootPtr)),
+			uintptr(unsafe.Pointer(&freeToCaller)),
+			uintptr(unsafe.Pointer(&total)),
+			uintptr(unsafe.Pointer(&totalFree)),
+		)
+		if r == 0 {
+			continue
+		}
+		disks = append(disks, Disk{
+			Mount:      strings.TrimSuffix(root, `\`), // "C:\" -> "C:"
+			TotalBytes: int64(total),
+			FreeBytes:  int64(freeToCaller),
+		})
+	}
+	return topDisks(disks)
+}
+
+// splitDriveStrings decodes the NUL-separated, double-NUL-terminated buffer GetLogicalDriveStringsW
+// fills ("C:\\\x00D:\\\x00\x00") into root-path strings.
+func splitDriveStrings(buf []uint16) []string {
+	var roots []string
+	start := 0
+	for i, c := range buf {
+		if c == 0 {
+			if i > start {
+				roots = append(roots, windows.UTF16ToString(buf[start:i]))
+			}
+			start = i + 1
+		}
+	}
+	return roots
 }
 
 // MARK: - small helpers

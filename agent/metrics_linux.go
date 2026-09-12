@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -98,6 +99,62 @@ func readMemory() Memory {
 	}
 	m.UsedBytes = m.TotalBytes - m.AvailableBytes
 	return m
+}
+
+// MARK: - Disks
+
+// localFSTypes are the real on-disk filesystems worth reporting. Everything else in /proc/mounts is
+// pseudo/virtual (proc, sysfs, tmpfs, devtmpfs, overlay, squashfs, cgroup*, fuse*, devpts): it either
+// reports RAM-backed or zero capacity, or re-exposes storage already counted elsewhere.
+var localFSTypes = map[string]bool{
+	"ext4": true, "ext3": true, "xfs": true, "btrfs": true, "zfs": true, "f2fs": true,
+}
+
+// readDisks parses /proc/mounts, keeps real local filesystems, dedupes by backing device so bind
+// mounts don't double-count, and statfs's each. Free uses Bavail*Bsize, NOT Bfree*Bsize: Bfree
+// includes root-reserved blocks an unprivileged process can't use, so it overstates free space.
+func readDisks() []Disk {
+	f, err := os.Open("/proc/mounts")
+	if err != nil {
+		return []Disk{} // never nil — a nil slice marshals to `null` and breaks the viewer (#33)
+	}
+	defer f.Close()
+
+	seen := map[string]bool{}
+	disks := []Disk{}
+	s := bufio.NewScanner(f)
+	for s.Scan() {
+		fields := strings.Fields(s.Text())
+		if len(fields) < 3 {
+			continue
+		}
+		device, mount, fsType := fields[0], unescapeMount(fields[1]), fields[2]
+		if !localFSTypes[fsType] || seen[device] {
+			continue
+		}
+		seen[device] = true
+		var st syscall.Statfs_t
+		if syscall.Statfs(mount, &st) != nil {
+			continue
+		}
+		bsize := int64(st.Bsize)
+		disks = append(disks, Disk{
+			Mount:      mount,
+			TotalBytes: int64(st.Blocks) * bsize,
+			FreeBytes:  int64(st.Bavail) * bsize,
+			FSType:     fsType,
+		})
+	}
+	return topDisks(disks)
+}
+
+// unescapeMount decodes the octal escapes /proc/mounts uses for space (\040), tab (\011), newline
+// (\012), and backslash (\134) in a mount path, so a path with a space reads correctly.
+func unescapeMount(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(s)
 }
 
 // MARK: - small helpers

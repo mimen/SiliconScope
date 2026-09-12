@@ -103,12 +103,24 @@ public extension MachineMetrics {
             fanRPMs: s.thermal.fanRPMs
         )
 
+        // Local-volume capacity for the storage card. VolumeSampler reads it sudolessly via
+        // URLResourceValues and already drops hidden/non-browsable volumes — so the sealed read-only
+        // system volume and other synthetic mounts don't appear, and macOS shows only the one
+        // user-visible boot volume. Keep local mounts (a mounted SMB/NFS share is not this machine's
+        // disk) and cap at the 8 largest. Empty array, never nil, on a Mac with no qualifying volume.
+        let disks = VolumeSampler.sample()
+            .filter(\.isLocal)
+            .sorted { $0.totalBytes > $1.totalBytes }
+            .prefix(8)
+            .map { FleetDisk(mount: $0.name, totalBytes: $0.totalBytes, freeBytes: max(0, $0.freeBytes)) }
+
         return MachineMetrics(
             machineId: machineId, hostname: hostname, os: osName, kind: "mac",
             agentVersion: agentVersion, ts: tsMillis, cpu: cpu, memory: memory,
             // A Mac serving models reports its decode rate the same way the Linux agent does, so
             // the fleet describes both in one vocabulary. nil when no runtime publishes one.
-            gpus: [gpu], llm: tokenRate.map { FleetLLM(ollama: nil, rate: $0) }, apple: apple
+            gpus: [gpu], llm: tokenRate.map { FleetLLM(ollama: nil, rate: $0) }, apple: apple,
+            disks: disks
         )
     }
 }

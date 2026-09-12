@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,18 @@ type MachineMetrics struct {
 	CPU          CPU    `json:"cpu"`
 	Memory       Memory `json:"memory"`
 	GPUs         []GPU  `json:"gpus"`
+	Disks        []Disk `json:"disks"`
 	LLM          *LLM   `json:"llm,omitempty"`
+}
+
+// Disk is one mounted local filesystem's capacity. The viewer derives used as total - free, so no
+// third number is sent. FSType is omitempty (Windows doesn't cheaply expose it). Always emitted as a
+// real array, never nil — a nil slice marshals to `null`, which broke the viewer's decode (#33).
+type Disk struct {
+	Mount      string `json:"mount"`
+	TotalBytes int64  `json:"totalBytes"`
+	FreeBytes  int64  `json:"freeBytes"`
+	FSType     string `json:"fsType,omitempty"`
 }
 
 type CPU struct {
@@ -140,8 +152,22 @@ func sample() MachineMetrics {
 		CPU:          readCPU(),
 		Memory:       readMemory(),
 		GPUs:         readGPUs(),
+		Disks:        readDisks(),
 		LLM:          readLLM(),
 	}
+}
+
+// topDisks caps the list at the 8 largest by capacity (largest first) so a host with many mounts
+// can't bloat the payload or the storage card, and guarantees a non-nil slice (never `null`, #33).
+func topDisks(disks []Disk) []Disk {
+	sort.Slice(disks, func(i, j int) bool { return disks[i].TotalBytes > disks[j].TotalBytes })
+	if len(disks) > 8 {
+		disks = disks[:8]
+	}
+	if disks == nil {
+		return []Disk{}
+	}
+	return disks
 }
 
 // runServer exposes GET /metrics (token-protected, a fresh sample per request) + GET /healthz
