@@ -120,7 +120,7 @@ func readDisks() []Disk {
 	}
 	defer f.Close()
 
-	seen := map[string]bool{}
+	byDevice := map[string]int{} // backing device -> index into disks
 	disks := []Disk{}
 	s := bufio.NewScanner(f)
 	for s.Scan() {
@@ -129,21 +129,31 @@ func readDisks() []Disk {
 			continue
 		}
 		device, mount, fsType := fields[0], unescapeMount(fields[1]), fields[2]
-		if !localFSTypes[fsType] || seen[device] {
+		if !localFSTypes[fsType] {
 			continue
 		}
-		seen[device] = true
 		var st syscall.Statfs_t
 		if syscall.Statfs(mount, &st) != nil {
 			continue
 		}
 		bsize := int64(st.Bsize)
-		disks = append(disks, Disk{
+		d := Disk{
 			Mount:      mount,
 			TotalBytes: int64(st.Blocks) * bsize,
 			FreeBytes:  int64(st.Bavail) * bsize,
 			FSType:     fsType,
-		})
+		}
+		// One device appears once per bind mount, so keep the shortest mount path: that is the
+		// filesystem's own root rather than a bind of some file inside it. Taking the first entry
+		// instead reports a container's "/etc/resolv.conf" as the whole disk.
+		if i, ok := byDevice[device]; ok {
+			if len(mount) < len(disks[i].Mount) {
+				disks[i] = d
+			}
+			continue
+		}
+		byDevice[device] = len(disks)
+		disks = append(disks, d)
 	}
 	return topDisks(disks)
 }

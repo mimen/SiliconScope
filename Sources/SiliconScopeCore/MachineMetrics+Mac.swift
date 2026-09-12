@@ -7,8 +7,10 @@
 //             source-agnostic MachineMetrics wire schema, so a Mac can serve itself to the fleet the
 //             same way the Linux agent does. Fills the Apple-only block (E/P split, ANE/Media,
 //             per-requestor bandwidth, power breakdown, fans) that has no counterpart on Linux.
-//  Notes:     Pure — no I/O. Values outside SystemSnapshot (1-min load average, ANE/Media peaks for
-//             bar-scaling) are passed in by the caller (app share-mode reads them off the monitor's
+//  Notes:     Almost pure: the only I/O is one VolumeSampler pass for local-volume capacity (the
+//             storage card); the rest is mapping. Values outside SystemSnapshot (1-min load average,
+//             ANE/Media peaks for bar-scaling) are passed in by the caller (app share-mode reads them
+//             off the monitor's
 //             engine-derived vars; the CLI agent computes them). Usage fractions in the snapshot are
 //             0…1, so they're ×100 here; a single blended CPU% is core-count-weighted across E/P.
 //             Unified memory means "VRAM" is in-use GPU bytes against total physical RAM.
