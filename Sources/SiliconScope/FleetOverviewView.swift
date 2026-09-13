@@ -110,6 +110,7 @@ private struct FleetTile: View {
                         .foregroundStyle(r.age < 120 ? Theme.text : Theme.faint)
                         .lineLimit(1)
                 }
+                storageRow(m.disks)
             } else if let e = error {
                 spacerText(e, .red)
             } else {
@@ -124,8 +125,31 @@ private struct FleetTile: View {
     }
 
     /// All tiles share one height; the charts flex to fill, so a 2-chart (Linux) and a 3-chart
-    /// (Apple, incl. ANE/Bandwidth) tile are the same size with no dead space.
-    private let tileHeight: CGFloat = 246
+    /// (Apple, incl. ANE/Bandwidth) tile are the same size with no dead space. The extra height
+    /// over the pre-storage 246 buys the storage row outright rather than taking it from the
+    /// charts, which are already at their `miniChart` minimum on a 3-chart tile.
+    private let tileHeight: CGFloat = 282
+
+    /// Fixed, so storage reads as the same element on every machine. The charts above flex, so
+    /// they absorb the difference between a 1-chart and a 3-chart tile and this row does not.
+    private let storageRowHeight: CGFloat = 30
+
+    /// The largest volume, as one bar pinned to the tile's foot. A tile answers "is this machine
+    /// filling up"; which volume is mounted where is the detail view's job. `.state` is the right
+    /// encoding because fullness has no identity colour — the colour IS the reading.
+    ///
+    /// The slot is reserved when an agent reports no disks (one predating the field), so tiles
+    /// stay aligned across the grid instead of the row jumping by machine.
+    @ViewBuilder private func storageRow(_ disks: [FleetDisk]?) -> some View {
+        if let d = disks?.max(by: { $0.totalBytes < $1.totalBytes }), d.totalBytes > 0 {
+            Bar(label: d.mount, value: d.usedFraction,
+                detail: formatBytesOfTotal(UInt64(d.usedBytes), UInt64(d.totalBytes)),
+                encoding: .state)
+                .frame(height: storageRowHeight)
+        } else {
+            Color.clear.frame(height: storageRowHeight)
+        }
+    }
 
     @ViewBuilder private var cornerGlyph: some View {
         if isLocal {
