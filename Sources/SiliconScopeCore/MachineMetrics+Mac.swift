@@ -111,7 +111,7 @@ public extension MachineMetrics {
         // user-visible boot volume. Keep local mounts (a mounted SMB/NFS share is not this machine's
         // disk) and cap at the 8 largest. Empty array, never nil, on a Mac with no qualifying volume.
         let disks = VolumeSampler.sample()
-            .filter(\.isLocal)
+            .filter { $0.isLocal && !$0.isReadOnly }
             .sorted { $0.totalBytes > $1.totalBytes }
             .prefix(8)
             .map { FleetDisk(mount: $0.name, totalBytes: $0.totalBytes, freeBytes: max(0, $0.freeBytes)) }

@@ -17,6 +17,10 @@ public struct VolumeInfo: Sendable, Identifiable, Equatable {
     public let totalBytes: Int64
     public let freeBytes: Int64
     public let isLocal: Bool
+    /// A mounted disk image (an installer DMG) is read-only, a real data volume is not. Reported
+    /// rather than filtered here: the menu-bar volume list legitimately shows whatever is mounted,
+    /// while the fleet wire wants only this machine's own storage. Same data, two questions.
+    public let isReadOnly: Bool
     public var id: String { name }
     public var usedFraction: Double {
         totalBytes > 0 ? Double(totalBytes - min(max(freeBytes, 0), totalBytes)) / Double(totalBytes) : 0
@@ -26,7 +30,7 @@ public struct VolumeInfo: Sendable, Identifiable, Equatable {
 public enum VolumeSampler {
     private static let keys: Set<URLResourceKey> = [
         .volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityKey,
-        .volumeIsLocalKey, .volumeIsBrowsableKey,
+        .volumeIsLocalKey, .volumeIsBrowsableKey, .volumeIsReadOnlyKey,
     ]
 
     public static func sample() -> [VolumeInfo] {
@@ -41,7 +45,8 @@ public enum VolumeSampler {
                 name: r.volumeName ?? url.lastPathComponent,
                 totalBytes: Int64(total),
                 freeBytes: Int64(r.volumeAvailableCapacity ?? 0),
-                isLocal: r.volumeIsLocal ?? true))
+                isLocal: r.volumeIsLocal ?? true,
+                isReadOnly: r.volumeIsReadOnly ?? false))
         }
         // Local first, then by name.
         return out.sorted { ($0.isLocal ? 0 : 1, $0.name) < ($1.isLocal ? 0 : 1, $1.name) }
