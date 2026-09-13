@@ -56,14 +56,24 @@ public final class SystemSampler: @unchecked Sendable {
     private var lastProcessSample: Date = .distantPast
     private let processInterval: TimeInterval = 2.5
 
+    /// ⚠️ Resolved independently of `CPUSampler`, which owns it on Apple Silicon but cannot
+    /// construct at all on an Intel Mac (it needs the "CPU Stats" IOReport group, which those
+    /// machines do not publish). Reading topology through the sampler meant one missing IOReport
+    /// group also cost the core count and the chip name, so an i9 reported "Apple Silicon, 0
+    /// cores" (#56). `CPUTopology.detect()` reads sysctl and is correct on both architectures.
+    private let resolvedTopology = CPUTopology.detect()
+
+    /// Whole-machine CPU usage for hosts without IOReport. Nil on Apple Silicon, where `cpu` serves.
+    private let tickCPU: TickCPUSampler?
+
     public init() {
-        let topology = cpu?.topology
-        gpu = topology.flatMap { GPUSampler(topology: $0) }
-        let coreCount = topology.map { $0.eCoreCount + $0.pCoreCount } ?? 0
-        temperature = TemperatureSampler(coreCount: coreCount)
+        gpu = cpu.flatMap { GPUSampler(topology: $0.topology) }
+        temperature = TemperatureSampler(
+            coreCount: resolvedTopology.eCoreCount + resolvedTopology.pCoreCount)
+        tickCPU = cpu == nil ? TickCPUSampler() : nil
     }
 
-    public var topology: CPUTopology? { cpu?.topology }
+    public var topology: CPUTopology? { resolvedTopology }
 
     /// Produces one full snapshot. The four delta samplers (power, CPU, GPU, bandwidth) each
     /// sleep `interval` internally; they run CONCURRENTLY here, so this blocks for roughly
@@ -83,7 +93,16 @@ public final class SystemSampler: @unchecked Sendable {
             group.enter(); queue.async { work(); group.leave() }
         }
         parallel { let r = self.power?.sample(interval: interval) ?? PowerSample(); io.withLock { $0.power = r } }
-        parallel { let r = self.cpu?.sample(interval: interval) ?? CPUSample(); io.withLock { $0.cpu = r } }
+        parallel {
+            var sample = self.cpu?.sample(interval: interval) ?? CPUSample()
+            // Without IOReport there is no cluster split to read, so the whole-machine figure goes
+            // in the P slot. `mac()` weights the two slots by core count, and an Intel topology has
+            // eCoreCount 0, so that blend returns exactly this number with no Intel-only branch in
+            // the arithmetic.
+            if let tick = self.tickCPU { sample.pUsage = tick.sampleUsage() }
+            let r = sample   // immutable before capture: the lock closure may run concurrently
+            io.withLock { $0.cpu = r }
+        }
         parallel { let r = self.gpu?.sample(interval: interval) ?? GPUSample(); io.withLock { $0.gpu = r } }
         parallel { let r = self.bandwidth?.sample(interval: interval) ?? BandwidthSample(); io.withLock { $0.bandwidth = r } }
         group.wait()

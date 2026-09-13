@@ -63,8 +63,18 @@ public extension MachineMetrics {
         )
 
         let chip = topology?.chipName ?? "Apple Silicon"
+
+        #if arch(x86_64)
+        // An Intel Mac has no unified-memory GPU, no ANE, and no per-domain power or bandwidth:
+        // every one of those comes from IOReport, which it does not publish. Sending them as zeros
+        // claimed hardware that is not there — a 0°C GPU with "0.0 GB/32.0 GB VRAM" and an ANE row
+        // on a machine with neither (#56). Omitted rather than faked, the same rule the remote
+        // dashboard already follows for sensors it cannot fill.
+        let gpus: [FleetGPU] = []
+        let apple: FleetApple? = nil
+        #else
         // Unified memory: GPU "VRAM" = bytes the GPU is using now, against total physical RAM.
-        let gpu = FleetGPU(
+        let gpus: [FleetGPU] = [FleetGPU(
             index: 0,
             name: chip,
             driver: "Apple",
@@ -76,9 +86,9 @@ public extension MachineMetrics {
             powerLimitW: 0,
             processes: [],
             freqMHz: s.gpu.freqMHz
-        )
+        )]
 
-        let apple = FleetApple(
+        let apple: FleetApple? = FleetApple(
             chip: chip,
             aneWatts: s.power.aneWatts,
             anePeakWatts: anePeakWatts,
@@ -104,6 +114,7 @@ public extension MachineMetrics {
             ),
             fanRPMs: s.thermal.fanRPMs
         )
+        #endif
 
         // Local-volume capacity for the storage card. VolumeSampler reads it sudolessly via
         // URLResourceValues and already drops hidden/non-browsable volumes — so the sealed read-only
@@ -121,7 +132,7 @@ public extension MachineMetrics {
             agentVersion: agentVersion, ts: tsMillis, cpu: cpu, memory: memory,
             // A Mac serving models reports its decode rate the same way the Linux agent does, so
             // the fleet describes both in one vocabulary. nil when no runtime publishes one.
-            gpus: [gpu], llm: tokenRate.map { FleetLLM(ollama: nil, rate: $0) }, apple: apple,
+            gpus: gpus, llm: tokenRate.map { FleetLLM(ollama: nil, rate: $0) }, apple: apple,
             disks: disks
         )
     }
